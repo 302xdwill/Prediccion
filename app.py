@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
 from forecast_methods import (
     naive,
@@ -11,18 +10,10 @@ from forecast_methods import (
 )
 
 # ----------------------------------------
-# CONFIGURACIÓN GLOBAL DE ESTILO
+# CONFIGURACIÓN GENERAL
 # ----------------------------------------
-plt.rcParams["figure.figsize"] = [16, 5]
-plt.rcParams["axes.spines.top"] = False
-plt.rcParams["axes.spines.right"] = False
-plt.rcParams["lines.linewidth"] = 3
-plt.rcParams["lines.markersize"] = 8
-plt.rcParams["xtick.color"] = "gray"
-plt.rcParams["ytick.color"] = "gray"
-plt.grid(color="#F3F2F2", linestyle=":", linewidth=2)
-
 st.set_page_config(page_title="Pronóstico de Series de Tiempo", layout="wide")
+
 st.title("📈 Aplicación Web de Pronóstico de Series de Tiempo")
 st.write("Carga un archivo CSV y selecciona el método de pronóstico.")
 
@@ -49,7 +40,9 @@ if file is not None:
         # PREPROCESAMIENTO
         # ----------------------------------------
         data = df[[date_col, value_col]].copy()
+
         data[date_col] = pd.to_datetime(data[date_col], errors="coerce")
+
         data[value_col] = (
             data[value_col]
             .astype(str)
@@ -62,13 +55,16 @@ if file is not None:
         series = data[value_col]
 
         # ----------------------------------------
-        # VISUALIZACIÓN HISTÓRICA
+        # VISUALIZACIÓN PRINCIPAL (UNA SOLA)
         # ----------------------------------------
         st.subheader("📊 Serie de tiempo histórica")
-        st.line_chart(series)
+
+        chart_data = pd.DataFrame({
+            "Histórico": series
+        })
 
         # ----------------------------------------
-        # PARÁMETROS DEL PRONÓSTICO
+        # CONFIGURACIÓN DEL PRONÓSTICO
         # ----------------------------------------
         st.subheader("⚙️ Configuración del pronóstico")
 
@@ -83,63 +79,74 @@ if file is not None:
         if method == "Media Móvil":
             window = st.number_input("Ventana de la media móvil", min_value=2, value=5)
 
+        run = st.button("🚀 Ejecutar pronóstico", use_container_width=True)
+
         # ----------------------------------------
         # EJECUCIÓN
         # ----------------------------------------
-        if st.button("🚀 Ejecutar pronóstico"):
+        if run:
 
             # -------- CÁLCULO --------
             if method == "Ingenuo":
                 forecast = naive(series, horizon)
-                color, marker = "turquoise", "D"
 
             elif method == "Media":
                 forecast = mean_method(series, horizon)
-                color, marker = "gold", "X"
 
             elif method == "Media Móvil":
                 forecast = moving_average(series, horizon, window)
-                color, marker = "silver", "*"
 
             elif method == "Deriva":
                 forecast = drift(series, horizon)
-                color, marker = "deeppink", "o"
 
             elif method == "Ingenuo Estacional":
-                # Repite los últimos valores de una temporada
                 season_length = st.number_input("Tamaño de la temporada", min_value=2, value=7)
                 forecast = list(series.values[-season_length:])[:horizon]
-                color, marker = "turquoise", "D"
 
             forecast = np.array(forecast)
 
-            # -------- GRÁFICA AVANZADA --------
-            x_train = np.arange(len(series))
-            x_forecast = np.arange(len(series), len(series) + horizon)
+            # ----------------------------------------
+            # FECHAS FUTURAS
+            # ----------------------------------------
+            freq = pd.infer_freq(series.index)
+            if freq is None:
+                freq = "D"
 
-            fig, ax = plt.subplots()
+            forecast_index = pd.date_range(
+                start=series.index[-1],
+                periods=horizon + 1,
+                freq=freq
+            )[1:]
 
-            # Histórico
-            ax.plot(x_train, series, color="pink", marker="o", label="Datos Históricos")
+            forecast_series = pd.Series(forecast, index=forecast_index)
 
-            # Pronóstico
-            ax.plot(x_forecast, forecast, color=color, linestyle="--", marker=marker, label=f"Método {method}")
-
-            # Personalización
-            ax.tick_params(axis="x", labelrotation=90)
-            if "electricidad" in file.name.lower():
-                ax.set_ylabel("Demanda de Electricidad (MW)")
-            else:
-                ax.set_ylabel("Dólares Estadounidenses")
-            ax.set_xlabel("Día de Cotización")
-            ax.grid(color="#F3F2F2", linestyle=":", linewidth=2)
-            ax.legend()
-
-            st.pyplot(fig)
+            # 🔥 SUAVIZAR TRANSICIÓN (PRO)
+            forecast_series.iloc[0] = series.iloc[-1]
 
             # ----------------------------------------
-            # RESUMEN VISUAL
+            # UNIR HISTÓRICO + PRONÓSTICO
             # ----------------------------------------
+            chart_data = pd.DataFrame({
+                "Histórico": series,
+                "Pronóstico": forecast_series
+            })
+
+            # Evitar problemas visuales
+            chart_data["Pronóstico"] = chart_data["Pronóstico"].astype(float)
+
+            # Mostrar inicio del forecast
+            st.caption(f"📍 El pronóstico inicia en: {forecast_index[0].date()}")
+
+        # ----------------------------------------
+        # GRÁFICA FINAL (SIEMPRE UNA SOLA)
+        # ----------------------------------------
+        st.line_chart(chart_data)
+
+        # ----------------------------------------
+        # SI HAY PRONÓSTICO → MOSTRAR RESULTADOS
+        # ----------------------------------------
+        if run:
+
             st.subheader("📌 Resumen del Pronóstico")
 
             col1, col2, col3 = st.columns(3)
@@ -148,11 +155,12 @@ if file is not None:
             col3.metric("Promedio pronosticado", f"{np.mean(forecast):.2f}")
 
             # ----------------------------------------
-            # MÉTRICAS DE ERROR (VALOR AGREGADO)
+            # MÉTRICAS
             # ----------------------------------------
             st.subheader("📊 Métricas de Evaluación")
 
             y_true = np.array([series.iloc[-1]] * horizon)
+
             mae = np.mean(np.abs(y_true - forecast))
             rmse = np.sqrt(np.mean((y_true - forecast) ** 2))
 
@@ -160,10 +168,10 @@ if file is not None:
             st.write(f"- **RMSE (Raíz del Error Cuadrático Medio):** {rmse:.2f}")
 
             # ----------------------------------------
-            # TABLA DE PRONÓSTICO
+            # TABLA DE RESULTADOS
             # ----------------------------------------
             forecast_df = pd.DataFrame({
-                "Periodo Futuro": range(1, horizon + 1),
+                "Fecha": forecast_index,
                 "Valor Pronosticado": forecast
             })
 
